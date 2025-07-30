@@ -1,8 +1,9 @@
 --cpu Cortex-M7.fp.dp
 "usart\startup_stm32h723xx.o"
-"usart\main.o"
 "usart\gpio.o"
+"usart\main.o"
 "usart\memorymap.o"
+"usart\tim.o"
 "usart\usart.o"
 "usart\stm32h7xx_it.o"
 "usart\stm32h7xx_hal_msp.o"

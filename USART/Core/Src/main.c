@@ -19,6 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "memorymap.h"
+#include "tim.h"
 #include "usart.h"
 #include "gpio.h"
 
@@ -39,6 +40,55 @@ float targetY_m = 0.00;
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+/*
+//方案三
+#define STEPS_PER_DEGREE 142.0f  // 每度所需的步数
+#define MAX_HORIZONTAL_ANGLE 45.0f  // 最大水平旋转角度(度)
+#define MAX_VERTICAL_ANGLE   30.0f  // 最大垂直倾斜角度(度)
+#define MIN_VERTICAL_ANGLE  -30.0f  // 最小垂直倾斜角度(度)
+
+// 电机地址定义
+#define HORIZONTAL_MOTOR_ADDR 5  // 水平电机(底座)
+#define VERTICAL_MOTOR_ADDR   4  // 垂直电机
+
+// 指令队列参数
+#define CMD_QUEUE_SIZE 20
+#define MAX_PATH_POINTS 150
+
+// 路径点结构
+typedef struct {
+    float h_angle;  // 水平角度
+    float v_angle;  // 垂直角度
+    float velocity_multiplier; // 速度乘数 (0.5-1.0)
+} AnglePoint;
+
+// 电机指令结构
+typedef struct {
+    uint8_t cmd[13];    // 指令数据
+    uint32_t exec_time; // 执行时间戳
+} MotorCommand;
+
+// 系统状态
+typedef enum {
+    SYS_IDLE,            // 空闲状态
+    SYS_MOVING,          // 运动中状态
+    SYS_DRAWING,         // 绘图状态
+    SYS_PROCESSING       // 处理状态
+} SystemState;
+AnglePoint path_points[MAX_PATH_POINTS]; // 路径点数组
+uint16_t path_count = 0;                 // 当前路径点数
+uint16_t current_path_index = 0;         // 当前执行的路径点索引
+
+float current_h_angle = 0.0f;  // 当前水平角度
+float current_v_angle = 0.0f;  // 当前垂直角度
+
+MotorCommand cmd_queue[CMD_QUEUE_SIZE]; // 指令队列
+uint8_t cmd_queue_head = 0;             // 队列头指针
+uint8_t cmd_queue_tail = 0;             // 队列尾指针
+
+SystemState sys_state = SYS_IDLE;
+//方案三完结
+*/
 //设置状�??
 
 /* USER CODE END PTD */
@@ -50,7 +100,18 @@ float targetY_m = 0.00;
 #define MAX_X 0.33f   // X轴最大移动距�?33cm
 #define MAX_Y 0.33f   // Y轴最大移动距�?33cm
 #define MAX_Z 0.15f   // Z轴最大移动距�?15cm
+#define M_PI 3.1415926535f
 
+#define DEG_TO_RAD (M_PI / 180.0f)
+#define RAD_TO_DEG (180.0f / M_PI)
+
+#define HORIZONTAL_MOTOR_ADDR 5  // 水平电机(底座)
+#define VERTICAL_MOTOR_ADDR   4  // 垂直电机
+
+#define LOW_SPEED    2
+#define MEDIUM_SPEED 4
+#define HIGH_SPEED   6
+#define MAX_POINTS 100
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -63,7 +124,25 @@ float targetY_m = 0.00;
 /* USER CODE BEGIN PV */
 float currentPosition[3] = {0.0f, 0.0f, 0.0f}; 
 
+float current_h_angle = 0.0f;  // 水平角度(度)
+float current_v_angle = 0.0f;  // 垂直角度(度)
 
+uint32_t steps_h= 0;
+uint32_t steps_v= 0;
+/*typedef struct {
+    float h_angle;  // 水平角度
+    float v_angle;  // 垂直角度
+} AnglePoint;*/
+
+typedef struct {
+    float h_angle;
+    float v_angle;
+} PathPoint;
+
+
+
+PathPoint path_points[MAX_POINTS];
+uint16_t path_count = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -75,7 +154,7 @@ void Emm_V5_Synchronous_motion(uint8_t addr);
 void Stop_Motor(uint8_t addr);
 void motors12_forward(uint16_t vel, float distance);
 void motors12_backward(uint16_t vel, float distance);
-
+void motor4_down(uint16_t vel, float distance);
 void motor3_forward(uint16_t vel, float distance);
 void motor3_backward(uint16_t vel, float distance);
 void motor4_forward(uint16_t vel, float distance);
@@ -87,11 +166,59 @@ void MoveToPoint(float x_m, float y_m, float z_m, uint16_t vel_x, uint16_t vel_y
 void CheckLimitSwitches(void);
 void MoveTo(float x_m, float y_m,float z_m, uint16_t vel_x, uint16_t vel_y, uint16_t vel_z);
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart);
+uint16_t angle_handle(float angle);
+void right(uint16_t vel,float angle);
+void left(uint16_t vel,float angle);
+void up(uint16_t vel,float angle);
+void down(uint16_t vel,float angle);
+//void draw_square(uint16_t vel);
+//void draw_triangle(uint16_t vel);
+void draw_syn(uint16_t vel);
+void move_to_angle(uint16_t vel, float target_h, float target_v);
+void draw_square(uint16_t vel, float size);
+void draw_triangle(uint16_t vel, float size);
+void draw_circle(uint16_t vel, float radius, int segments);
+
+void move_to_angle1(float h_angle, float v_angle, uint16_t vel);
+
+void draw_line_in_angle(float h0, float v0, float h1, float v1, uint16_t vel, uint16_t segments);
+void draw_square_in_angle(float size_h, float size_v, uint16_t vel);
+void draw_triangle_in_angle(float size_h, float size_v, uint16_t vel);
+void draw_circle_in_angle(float radius_h, float radius_v, uint16_t segments, uint16_t vel);
+void clear_path(void);
+void execute_path(uint16_t vel);
+
+
+
+
+//方案三
+// 运动控制函数
+void move_to_angle_absolute(float h_target, float v_target, uint16_t vel);
+void draw_line_absolute(float h0, float v0, float h1, float v1, uint16_t vel, uint16_t segments) ;
+void clear_path1(void) ;
+void execute_path1(uint16_t vel) ;
+void draw_square_absolute(float center_h, float center_v, float size, uint16_t vel) ;
+void draw_triangle_absolute(float center_h, float center_v, float size, uint16_t vel);
+
+void draw_circle_absolute(float center_h, float center_v, float radius, uint16_t segments, uint16_t vel);
+
+// 归零函数（执行一次确保绝对坐标基准）
+void homing_sequence(uint16_t vel) ;
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+//方案三
+/*#define CLAMP_ANGLE(angle, min, max) \
+    do { \
+        if (angle < min) angle = min; \
+        else if (angle > max) angle = max; \
+    } while(0)
+*/
+
+//方案三
+
 int __io_putchar(int ch){
 	HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, 100);
 	return ch;
@@ -134,8 +261,10 @@ int main(void)
   MX_UART9_Init();
   MX_USART2_UART_Init();
   MX_USART1_UART_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
-  HAL_Delay(100);
+  HAL_TIM_PWM_Start(&htim2,TIM_CHANNEL_1);
+
  
   
   HAL_UART_Receive_IT(&huart2, &rxBuffer[0], 1);
@@ -144,9 +273,16 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
-  {  //电机1的方�?1backward
-	 //电机2的方�?0backward
-	//Emm_V5_Pos_Control(1, 1, 50, 10, 32000, 0, 1);
+  {  
+       //homing_sequence(400) ;
+	  //draw_triangle(4);
+	  
+	  //draw_square_in_angle(4.0f, 4.0f, 2);
+	  draw_triangle_in_angle(4.0f, 4.0f, 1);
+	  //draw_circle_in_angle(4.0f, 4.0f, 150, 2);
+	  
+	  //draw_square_absolute(0.0f,0.0f,2.0f,1);
+	  while(1){}
 	//HAL_Delay(500);
 	//Emm_V5_Pos_Control(2, 0, 50, 10, 32000, 0, 1);
 	//HAL_Delay(500);
@@ -157,13 +293,14 @@ int main(void)
 	 //motor4_forward(4, 0.03);
 	   //HAL_UART_Transmit_IT(&huart1,(uint8_t*)message,strlen(message));
 	 
-	 if(packetReady){
+	 /*(packetReady){
 	 MoveToPoint(targetX_m, targetY_m, 0, 800, 800, 0); 
 		packetReady = 0;
 	  HAL_Delay(1000);
 	
-  }
-	  
+  }*/
+	  //right(2,90);
+	  //motor4_down(5, 0.02);
 	// MoveToPoint( 0.03, 0.03, 0.00, 1000, 1000, 3);
 	//   MoveToPoint( 0.02, 0.01, 0.00, 1000, 1000, 3);
 	//MoveTo( 0.07, 0.07, 0.00, 3, 3, 3);
@@ -299,7 +436,7 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart){
   cmd[11] =  snF;                      
   cmd[12] =  0x6B;                     
   
-  HAL_UART_Transmit(&huart9,cmd,13,1000);
+  HAL_UART_Transmit(&huart2,cmd,13,100);
 }
 
 void Emm_V5_Synchronous_motion(uint8_t addr)
@@ -311,7 +448,7 @@ void Emm_V5_Synchronous_motion(uint8_t addr)
   cmd[2] =  0x66;                       
   cmd[3] =  0x6B;                       
   
-  HAL_UART_Transmit(&huart9,cmd,4,1000);
+  HAL_UART_Transmit(&huart2,cmd,4,1000);
 }
 void Stop_Motor(uint8_t addr)
 {
@@ -319,10 +456,43 @@ void Stop_Motor(uint8_t addr)
 }
 uint16_t x_handle(float x){
     uint16_t location=0;
-    location=3200*((x*100.0/(_2PI_ * 0.6 )));
+    location=3200*((x*100.0f/(_2PI_ * 0.25f )));
     return location;
 } 
 
+uint16_t angle_handle(float angle){
+    uint16_t location=0; 
+    location=(angle*142);
+    return location;
+}
+
+void motors1_forward(uint16_t vel, float distance)
+{
+  HAL_Delay(50);
+  uint32_t steps = x_handle(distance);
+ 
+  Emm_V5_Pos_Control(1, 1, vel, 5, steps, 0, 0);
+  HAL_Delay(50);
+ 
+  
+  // 发鿁同步命仿
+  Emm_V5_Synchronous_motion(0);
+  
+  HAL_Delay(200);
+}
+
+void motors2_forward(uint16_t vel, float distance)
+{
+  HAL_Delay(50);
+  uint32_t steps = x_handle(distance);
+ 
+  Emm_V5_Pos_Control(2, 0, vel, 5, steps, 0, 0);
+  HAL_Delay(50);
+  // 发鿁同步命仿
+  Emm_V5_Synchronous_motion(0);
+  
+  HAL_Delay(200);
+}
 void motors12_forward(uint16_t vel, float distance)
 {
   HAL_Delay(200);
@@ -369,8 +539,8 @@ void motor3_forward(uint16_t vel, float distance){
 	Emm_V5_Pos_Control(3, 0, vel, 5, steps, 0, 0);
 	HAL_Delay(20);
 }
-//电机4是上下运�?
-void motor4_down(uint16_t vel, float distance){
+
+void motor4_down(uint16_t vel, float distance){//�?�?
 	HAL_Delay(200);
 	//if(distance>0.15){distance=0.15;}
 	
@@ -385,8 +555,555 @@ void motor4_up(uint16_t vel, float distance){
 	Emm_V5_Pos_Control(4, 0, vel, 5, steps, 0, 0);
 	HAL_Delay(20);
 }
+/*void draw_square(uint16_t vel){
+	right(vel,10);
+	HAL_Delay(1000);
+	up(vel,15);
+	HAL_Delay(1000);
+	left(vel,18);
+	HAL_Delay(1000);
+	down(vel,15);
+	HAL_Delay(1000);
+	right(vel,10);
+}
+void draw_triangle(uint16_t vel){
+	right(vel,5);
+    HAL_Delay(1000);
+	Emm_V5_Pos_Control(5,0,vel,4,710,0,1);//5向左
+	HAL_Delay(10);
+	Emm_V5_Pos_Control(4,1,vel,4,710,0,1);//4向上
+	 HAL_Delay(5);
+  // 发鿁同步命仿
+    Emm_V5_Synchronous_motion(0);
+	HAL_Delay(1000);
+	Emm_V5_Pos_Control(5,0,vel,4,710,0,1);
+	HAL_Delay(10);
+	Emm_V5_Pos_Control(4,0,vel,4,710,0,1);//4向下
+	HAL_Delay(5);
+  // 发鿁同步命仿
+    Emm_V5_Synchronous_motion(0);
+	
+	HAL_Delay(1000);
+	
+	right(vel,5);
+}*/
+void draw_syn(uint16_t vel){
+	Emm_V5_Pos_Control(5,0,vel,4,1420,0,1);//5向左
+	HAL_Delay(10);
+	Emm_V5_Pos_Control(4,1,vel,4,1420,0,1);//4向上
+	HAL_Delay(20);
+  // 发鿁同步命仿
+    Emm_V5_Synchronous_motion(0);
+}
+void right(uint16_t vel,float angle){//前进打包函数
+  HAL_Delay(50);
+  uint16_t rel_location=angle_handle(angle);
+  Emm_V5_Pos_Control(5,1,vel,4,rel_location,0,0);
+  HAL_Delay(20);
+}
+void left(uint16_t vel,float angle){
+  HAL_Delay(50);
+  uint16_t rel_location=angle_handle(angle);
+  Emm_V5_Pos_Control(5,0,vel,4,rel_location,0,0);
+  HAL_Delay(20);
+}
+
+void up(uint16_t vel,float angle){//前进打包函数
+  HAL_Delay(50);
+  uint16_t rel_location=angle_handle(angle);
+  Emm_V5_Pos_Control(4,1,vel,4,rel_location,0,0);
+  HAL_Delay(20);
+}
+void down(uint16_t vel,float angle){
+  HAL_Delay(50);
+  uint16_t rel_location=angle_handle(angle);
+  Emm_V5_Pos_Control(4,0,vel,4,rel_location,0,0);
+  HAL_Delay(20);
+}
+//
+/*void move_to_angle(uint16_t vel, float target_h, float target_v) {
+   
+    // 2. 计算角度差
+    float delta_h = target_h - current_h_angle;
+    float delta_v = target_v - current_v_angle;
+    
+    // 3. 使用 angle_handle 转换为步数
+    uint16_t steps_h = angle_handle(fabsf(delta_h));
+    uint16_t steps_v = angle_handle(fabsf(delta_v));
+    
+    // 4. 确定方向
+    uint8_t dir_h = (delta_h >= 0) ? 1 : 0; // 1=右, 0=左
+    uint8_t dir_v = (delta_v >= 0) ? 1 : 0; // 1=上, 0=下
+    
+	if(steps_h>0 && steps_v == 0){
+		Emm_V5_Pos_Control(5, dir_h, vel, 4, steps_h, 0, 0);
+		HAL_Delay(1000);
+	}
+	if(steps_h == 0 && steps_v > 0){
+		Emm_V5_Pos_Control(4, dir_v, vel, 4, steps_v, 0, 0);
+		HAL_Delay(1000);
+	}
+	
+	if(steps_h > 0 && steps_v > 0){
+		Emm_V5_Pos_Control(5, dir_h, vel, 1, steps_h, 0, 1);
+		HAL_Delay(10);
+		Emm_V5_Pos_Control(4, dir_v, vel, 1, steps_v, 0, 1);
+		HAL_Delay(10);
+		Emm_V5_Synchronous_motion(0);
+		
+		
+        HAL_Delay(2000);
+	}
+    
+    
+    
+    // 7. 更新当前位置
+    current_h_angle = target_h;
+    current_v_angle = target_v;
+}*/
+
+//方案2
+
+void move_to_angle1(float h_angle, float v_angle, uint16_t vel)
+{
+	float delta_h = h_angle - current_h_angle;
+    float delta_v = v_angle - current_v_angle;
+	
+    steps_h = (fabsf(delta_h) * 142.86f);
+    steps_v = (fabsf(delta_v) * 142.86f);
+    
+	
+	uint8_t dir_h = (delta_h >= 0) ? 1 : 0; // 1=正方向, 0=负方向
+    uint8_t dir_v = (delta_v >= 0) ? 1 : 0; // 1=向上, 0=向下
+    
+	 // 如果两个轴都需要运动，发送同步指令
+    if (steps_h > 0 && steps_v > 0) {
+        Emm_V5_Pos_Control(HORIZONTAL_MOTOR_ADDR, dir_h, vel, 1, steps_h, 1, 1);
+		HAL_Delay(5);
+        Emm_V5_Pos_Control(VERTICAL_MOTOR_ADDR, dir_v, vel, 1, steps_v, 1, 1);
+	    HAL_Delay(5);
+        Emm_V5_Synchronous_motion(0);
+    } 
+    // 只有水平轴运动
+    else if (steps_h > 0) {
+        Emm_V5_Pos_Control(HORIZONTAL_MOTOR_ADDR, dir_h, vel, 1, steps_h, 1, false);
+    }
+    // 只有垂直轴运动
+    else if (steps_v > 0) {
+        Emm_V5_Pos_Control(VERTICAL_MOTOR_ADDR, dir_v, vel, 1, steps_v, 1, false);
+    }
+	
+	current_h_angle = h_angle;
+    current_v_angle = v_angle;
+	
+	
+       HAL_Delay(1000);
+    
+}
 
 
+void draw_line_in_angle(float h0, float v0, float h1, float v1, uint16_t vel, uint16_t segments)
+{
+	
+        path_points[path_count].h_angle = h0;
+        path_points[path_count].v_angle = v0;
+        path_count++;
+   
+	
+    // 线性插值
+    for (uint16_t i = 1; i <= segments; i++) {
+        float ratio = (float)i / (float)segments;
+        float h = h0 + ratio * (h1 - h0);
+        float v = v0 + ratio * (v1 - v0);
+        
+            path_points[path_count].h_angle = h;
+		
+            path_points[path_count].v_angle = v;
+            path_count++;
+        
+    }
+}
+
+void clear_path(void)
+{
+    path_count = 0;
+}
+
+void execute_path(uint16_t vel)
+{
+    for (uint16_t i = 0; i < path_count; i++) {
+		
+        move_to_angle1(path_points[i].h_angle, path_points[i].v_angle, vel);
+	
+	}
+}
+
+void draw_square_in_angle(float size_h, float size_v, uint16_t vel)
+{
+    // 计算半尺寸
+    float half_h = size_h / 2.0f;
+    float half_v = size_v / 2.0f;
+    
+    // 清空路径
+    clear_path();
+    
+    // 创建正方形路径 (顺时针)
+    draw_line_in_angle( 0.0f, 0.0f, size_h, 0.0f, vel, 1);  // 上边
+    draw_line_in_angle( size_h,  0.0f, size_h, size_v, vel, 1);  // 左边
+    draw_line_in_angle( size_h, size_v,  0.0f, size_v, vel, 1);  // 下边
+    draw_line_in_angle( 0.0f, size_v, 0.0f,  0.0f, vel, 1);  // 右边
+    
+    // 执行路径
+    execute_path(vel);
+}
+
+void draw_triangle_in_angle(float size_h, float size_v, uint16_t vel)
+{
+	
+	float left_h = -size_h / 2.0f;
+	float right_h = size_h / 2.0f;
+	float up_v = size_v / 2.0f;
+	float down_v = size_v /2.0f;
+    
+    // 清空路径
+    clear_path();
+    
+    // 创建三角形路径
+    draw_line_in_angle(0.0f, 0.0f, size_h, 0.0f, vel, 10);      // 左上边
+    draw_line_in_angle(size_h, 0.0f,right_h, size_v, vel, 35);  // 左底边
+    draw_line_in_angle(right_h, size_v,0.0f , 0.0f, vel, 35);    // 右上边
+
+    
+	
+    // 执行路径
+    execute_path(vel);
+}
+
+void draw_circle_in_angle(float radius_h, float radius_v, uint16_t segments, uint16_t vel)
+{
+   
+    // 清空路径
+    clear_path();
+    
+    // 创建椭圆路径
+    for (uint16_t i = 0; i <= segments; i++) {
+        float angle = 2.0f * M_PI * i / segments;
+        float h = radius_h * cosf(angle);
+        float v = radius_v * sinf(angle);
+        
+        // 添加点到路径
+            
+            path_points[path_count].h_angle = h;
+            path_points[path_count].v_angle = v;
+            path_count++;
+        
+		
+    }
+    
+    // 执行路径
+    execute_path(vel);
+}
+
+
+//方案2
+
+/*
+//方案三
+
+void move_to_angle_absolute(float h_target, float v_target, uint16_t vel) {
+    // 计算目标位置对应的步数
+    uint32_t target_h_steps = (uint32_t)(h_target * 142.85f);
+    uint32_t target_v_steps = (uint32_t)(v_target * 142.85f);
+    
+    
+    uint8_t dir_h = (h_target >= current_h_angle) ? 1 : 0;
+    uint8_t dir_v = (v_target >= current_v_angle) ? 1 : 0;
+    
+    // 双轴运动（使用绝对位置模式，mode=0）
+    if (fabsf(h_target - current_h_angle) > 0.01f && 
+        fabsf(v_target - current_v_angle) > 0.01f) {
+        
+        Emm_V5_Pos_Control(HORIZONTAL_MOTOR_ADDR, dir_h, vel, 0, target_h_steps, 1, 1);
+        HAL_Delay(5);
+        Emm_V5_Pos_Control(VERTICAL_MOTOR_ADDR, dir_v, vel, 0, target_v_steps, 1, 1);
+        HAL_Delay(5);
+        Emm_V5_Synchronous_motion(1);  // 启用同步运动
+    } 
+    // 仅水平轴运动
+    if (fabsf(h_target - current_h_angle) > 0.01f && fabsf(v_target - current_v_angle) ==0.0f) {
+        Emm_V5_Pos_Control(HORIZONTAL_MOTOR_ADDR, dir_h, vel, 0, target_h_steps, 1, 0);
+    } 
+    // 仅垂直轴运动
+    if (fabsf(v_target - current_v_angle) > 0.01f && fabsf(v_target - current_v_angle) ==0.0f) {
+        Emm_V5_Pos_Control(VERTICAL_MOTOR_ADDR, dir_v, vel, 0, target_v_steps, 1, 0);
+    }
+    
+    // 更新当前位置
+    current_h_angle = h_target;
+    current_v_angle = v_target;
+    
+    HAL_Delay(100);  // 运动稳定时间
+}
+
+// 路径插值（绝对坐标）
+void draw_line_absolute(float h0, float v0, float h1, float v1, uint16_t vel, uint16_t segments) {
+    path_points[path_count].h_angle = h0;
+    path_points[path_count].v_angle = v0;
+    path_count++;
+    
+    for (uint16_t i = 1; i <= segments; i++) {
+        float ratio = (float)i / (float)segments;
+        float h = h0 + ratio * (h1 - h0);
+        float v = v0 + ratio * (v1 - v0);
+        
+      
+            path_points[path_count].h_angle = h;
+            path_points[path_count].v_angle = v;
+            path_count++;
+        
+    }
+}
+
+void clear_path1(void) {
+    path_count = 0;
+}
+
+void execute_path1(uint16_t vel) {
+    for (uint16_t i = 0; i < path_count; i++) {
+        move_to_angle_absolute(
+            path_points[i].h_angle, 
+            path_points[i].v_angle, 
+            vel
+        );
+    }
+}
+
+
+void draw_square_absolute(float center_h, float center_v, float size, uint16_t vel) {
+    float half_size = size / 2.0f;
+    
+    clear_path1();
+    
+    // 定义正方形的四个角（绝对坐标）
+    float points[5][2] = {
+        {center_h - half_size, center_v - half_size}, // 左下
+        {center_h + half_size, center_v - half_size}, // 右下
+        {center_h + half_size, center_v + half_size}, // 右上
+        {center_h - half_size, center_v + half_size}, // 左上
+        {center_h - half_size, center_v - half_size}  // 闭合
+    };
+    
+    // 创建路径
+    for (uint8_t i = 0; i < 4; i++) {
+        draw_line_absolute(
+            points[i][0], points[i][1],
+            points[i+1][0], points[i+1][1],
+            vel, 40
+        );
+    }
+    
+    execute_path1(vel);
+}
+
+void draw_triangle_absolute(float center_h, float center_v, float size, uint16_t vel) {
+    float height = size * 0.866f;  // 等边三角形高度
+    
+    clear_path1();
+    
+    // 定义三角形的三个顶点（绝对坐标）
+    float points[4][2] = {
+        {center_h, center_v + height/2},       // 上顶点
+        {center_h - size/2, center_v - height/2}, // 左下
+        {center_h + size/2, center_v - height/2}, // 右下
+        {center_h, center_v + height/2}        // 闭合
+    };
+    
+    // 创建路径
+    for (uint8_t i = 0; i < 3; i++) {
+        draw_line_absolute(
+            points[i][0], points[i][1],
+            points[i+1][0], points[i+1][1],
+            vel, 20
+        );
+    }
+    
+    execute_path1(vel);
+}
+
+void draw_circle_absolute(float center_h, float center_v, float radius, uint16_t segments, uint16_t vel) {
+    if (segments < 16) segments = 16;
+    if (segments > 120) segments = 120;
+    
+    clear_path1();
+    
+    // 生成圆形路径（绝对坐标）
+    for (uint16_t i = 0; i <= segments; i++) {
+        float angle = 2.0f * M_PI * i / segments;
+        float h = center_h + radius * cosf(angle);
+        float v = center_v + radius * sinf(angle);
+        
+        if (path_count < MAX_POINTS) {
+            path_points[path_count].h_angle = h;
+            path_points[path_count].v_angle = v;
+            path_count++;
+        }
+    }
+    
+    // 闭合圆形
+    if (path_count < MAX_POINTS) {
+        path_points[path_count].h_angle = path_points[0].h_angle;
+        path_points[path_count].v_angle = path_points[0].v_angle;
+        path_count++;
+    }
+    
+    execute_path1(vel);
+}
+
+// 归零函数（执行一次确保绝对坐标基准）
+void homing_sequence(uint16_t vel) {
+    
+    Emm_V5_Pos_Control(HORIZONTAL_MOTOR_ADDR, 0, vel, 1, 0, 0, 0); // 向左移动直到限位
+  
+    current_h_angle = 0.0f;
+    
+  
+    Emm_V5_Pos_Control(VERTICAL_MOTOR_ADDR, 0, vel, 1, 0, 0, 0); // 向下移动直到限位
+   
+    current_v_angle = 0.0f;
+}*/
+//方案三  
+/*
+// 绘制指定大小的正方形
+void draw_square(uint16_t vel, float size) {
+   
+    // 以当前位置为中心
+    float center_h = current_h_angle;
+    float center_v = current_v_angle;
+    
+    // 定义四个顶点（相对中心）
+    float points[][2] = {
+        {center_h + size/2, center_v + size/2}, // 右上
+        {center_h - size/2, center_v + size/2}, // 左上
+        {center_h - size/2, center_v - size/2}, // 左下
+        {center_h + size/2, center_v - size/2}, // 右下
+        {center_h + size/2, center_v + size/2}  // 闭合
+    };
+    
+    
+    // 移动到每个点
+    for (int i = 0; i < 5; i++) {
+        move_to_angle(vel, points[i][0], points[i][1]);
+        HAL_Delay(50); // 点间停顿
+    }
+    
+  }
+
+// 绘制指定大小的正三角形
+void draw_triangle(uint16_t vel, float size) {
+    
+    float center_h = current_h_angle;
+    float center_v = current_v_angle;
+    
+    // 等边三角形顶点计算
+    float height = size * 0.866f; // √3/2 ≈ 0.866
+    
+    float points[][2] = {
+        {center_h, center_v + height/2},         // 上顶点
+        {center_h - size/2, center_v - height/2}, // 左下
+        {center_h + size/2, center_v - height/2}, // 右下
+        {center_h, center_v + height/2}          // 闭合
+    };
+   
+    for (int i = 0; i < 4; i++) {
+        move_to_angle(vel, points[i][0], points[i][1]);   
+        HAL_Delay(50); // 点间停顿
+    }
+  }
+
+// 绘制指定半径的圆形
+void draw_circle(uint16_t vel, float radius, int segments) {
+   
+    // 分段数限制
+    if (segments < 8) segments = 8;
+    if (segments > 72) segments = 72;
+    
+    float center_h = current_h_angle;
+    float center_v = current_v_angle;
+    
+    // 计算并移动到每个点
+    for (int i = 0; i <= segments; i++) {
+        float angle = 2.0f *_2PI_ * i / segments;
+        float target_h = center_h + radius * cosf(angle);
+        float target_v = center_v + radius * sinf(angle);
+        
+        move_to_angle(vel, target_h, target_v);
+    }
+}
+
+
+void draw_square_smooth(uint16_t vel, float size) {
+    float center_h = current_h_angle;
+    float center_v = current_v_angle;
+    
+    // 定义四个顶点（相对中心）
+    float points[][2] = {
+        {center_h + size/2, center_v + size/2}, // 右上
+        {center_h - size/2, center_v + size/2}, // 左上
+        {center_h - size/2, center_v - size/2}, // 左下
+        {center_h + size/2, center_v - size/2}, // 右下
+        {center_h + size/2, center_v + size/2}  // 闭合
+    };
+    
+    
+    // 移动到每个点
+    for (int i = 0; i < 5; i++) {
+        move_to_angle(vel, points[i][0], points[i][1]);
+        HAL_Delay(50); // 点间停顿
+    }
+    
+ 
+}
+
+// 绘制三角形 - size: 边长（角度单位）
+void draw_triangle_smooth(uint16_t vel, float size) {
+    float center_h = current_h_angle;
+    float center_v = current_v_angle;
+    
+    // 等边三角形顶点计算
+    float height = size * 0.866f; // √3/2 ≈ 0.866
+    
+    float points[][2] = {
+        {center_h, center_v + height/2},      // 上顶点
+        {center_h - size/2, center_v - height/2}, // 左下
+        {center_h + size/2, center_v - height/2}, // 右下
+        {center_h, center_v + height/2}       // 闭合
+    };
+    
+   
+    for (int i = 0; i < 4; i++) {
+        move_to_angle(vel, points[i][0], points[i][1]);
+        HAL_Delay(50);
+    }
+  
+}
+
+// 绘制圆形 - radius: 半径（角度单位），segments: 分段数
+void draw_circle_smooth(uint16_t vel, float radius, int segments) {
+    float center_h = current_h_angle;
+    float center_v = current_v_angle;
+    
+  
+    // 计算并移动到每个点
+    for (int i = 0; i <= segments; i++) {
+        float angle = 2.0f * M_PI * i / segments;
+        float target_h = center_h + radius * cosf(angle);
+        float target_v = center_v + radius * sinf(angle);
+        
+        move_to_angle(vel, target_h, target_v);
+    }
+    
+  
+}*/
 /*static bool limitPA0Triggered = false;
 static bool limitPA1Triggered = false;
 static bool limitPA2Triggered = false;
@@ -445,7 +1162,7 @@ volatile bool z_limit_triggered = false;
 
 
 void CheckLimitSwitches(void)
-{
+	{
     // X轴限�? (PA0)
     GPIO_PinState x_state = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
     if (x_state == GPIO_PIN_RESET) {if (!x_limit_triggered) {x_limit_triggered = true;}} 
@@ -578,6 +1295,8 @@ void MoveToPoint(float x_m, float y_m,float z_m, uint16_t vel_x, uint16_t vel_y,
     }
 
 }
+
+
 
 /*void MoveTo(float x_m, float y_m,float z_m, uint16_t vel_x, uint16_t vel_y, uint16_t vel_z)
 {    

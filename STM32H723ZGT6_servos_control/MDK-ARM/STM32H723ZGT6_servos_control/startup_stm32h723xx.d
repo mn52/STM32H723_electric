@@ -1,0 +1,1 @@
+stm32h723zgt6_servos_control\startup_stm32h723xx.o: startup_stm32h723xx.s
